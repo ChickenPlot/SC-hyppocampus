@@ -1,0 +1,1769 @@
+---
+title: "HYPPOCAMPUS_CATCH-ScType"
+format: html
+editor: visual
+---
+
+```{r}
+#| echo: false
+setwd("C:/Users/Simo/Desktop/UNIVERSITY/1° ANNO/2° SEMESTRE/Genomics and Trascriptomics/2023/PAVESI/SC_PROJECT")
+```
+
+------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+# Libraries
+
+```{r}
+#| output: false
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(tidyverse)
+library(sleepwalk)
+library(DescTools) # for query
+library(clustree) # resolution choice, thx Irene
+```
+
+```{r}
+
+# function to remove the ensemble name 
+
+clean_names <- function(sparsematrix) {
+  lapply(rownames(sparsematrix) %>%    
+           strsplit(rownames(sparsematrix), split = '_E'),
+                        FUN = '[', 1)
+  
+}
+
+```
+
+# Data Loading
+
+```{r}
+
+
+load('hpc.sparse.RData') # loading the dataset 
+
+rownames(sm) <- clean_names(sm) # %>% toupper() #
+
+
+# actual seurat object for analysis
+tissue <- CreateSeuratObject(counts = sm, 
+                                project = "HPC", 
+                                min.cells = 3, 
+                                min.features = 200) # preliminary filtering 
+
+
+tissue
+# we start from a pool of 7768 cells
+```
+
+## python conversion 
+
+```{r}
+
+# this to convert in h5ad format for python - (RAPIDS+cuda+scanpy test)
+
+#library(SeuratDisk) 
+#SaveH5Seurat(tissue, filename = "sctissueMerged.h5Seurat") 
+#Convert("sctissueMerged.h5Seurat", dest = "h5ad")
+
+```
+
+# QUALITY
+
+```{r}
+tissue@assays$RNA@counts[100:120, 1:30]
+
+# formally better to use SueratObj@assays$RNA@counts instead of just the object itself
+```
+
+### mtRNA
+
+```{r}
+
+# sql-like qwery just to see the notation used in the tissueset
+# post note: this is now not so useful since i convert everything to uppercase
+table(rownames(tissue) %like% c("%Mt-%", "%MT-%", "%mt-%"))
+
+head(rownames(tissue)[rownames(tissue) %like% c("%Mt-%", "%MT-%", "%mt-%")])
+
+length(grep("mt-",rownames(tissue),value = TRUE)) #  actual pattern
+
+
+```
+
+### Ribosomal proteins
+
+```{r}
+
+# post note: this is now not so useful since i convert everything to uppercase
+
+table(rownames(tissue) %like% c("RPL%", "RPS%", "rpl%", "rps%", "Rpl%", "Rps%", "RpL%", "RpS%" ))
+
+head(rownames(tissue)[rownames(tissue) %like% c("RPL%", "RPS%", "rpl%", "rps%", "Rpl%", "Rps%", "RpL%", "RpS%" )])
+
+length(grep("^Rp[ls]",rownames(tissue),value = TRUE))
+
+```
+
+### Adding features
+
+```{r}
+
+# add features to seurat object
+
+tissue$percent.mt <- PercentageFeatureSet(tissue, pattern = "^mt-")
+tissue$percent.rbp <- PercentageFeatureSet(tissue, pattern ="^Rp[ls]")
+```
+
+# Features plots and exploration
+
+### Violins - vanilla
+
+```{r}
+
+# 
+VlnPlot(tissue,
+        features = c("nCount_RNA") , 
+        ncol = 1,
+        col =alpha(DiscretePalette(3, palette = 'parade'), 0.5), 
+        pt.size = 0)+
+  theme_minimal()
+
+
+
+#
+VlnPlot(tissue,
+        features = c("nFeature_RNA") , 
+        ncol = 1,
+        col =alpha(DiscretePalette(3, palette = 'parade'), 0.5), 
+        pt.size = 0)+ 
+    #geom_hline(yintercept = 500)+
+  geom_hline(yintercept = 1000)+ #  start strict
+  geom_hline(yintercept = 4000)+
+  theme_minimal()
+
+ 
+
+# 
+VlnPlot(tissue, 
+        features = c("percent.mt") , 
+        ncol = 1,col =alpha(DiscretePalette(3, palette = 'parade'), 0.5), 
+        pt.size = 0)+
+  geom_hline(yintercept = 5) + 
+theme_minimal()
+
+
+
+# 
+VlnPlot(tissue, 
+        features = c("percent.rbp") , 
+        ncol = 1,col =alpha(DiscretePalette(3, palette = 'parade'), 0.5), 
+        pt.size = 0)+theme_minimal()
+
+
+# lines point to preliminary cutoff points
+```
+
+### Scaled violins
+
+```{r}
+
+# log10 scaled
+
+VlnPlot(tissue,
+        features = c("nFeature_RNA") , 
+        ncol = 1,
+        col =alpha(DiscretePalette(3, palette = 'parade'), 0.5), 
+        pt.size = 0)+ 
+  geom_hline(yintercept = 350)+
+  geom_hline(yintercept = 4000)+
+  scale_y_log10()+theme_minimal()
+
+
+VlnPlot(tissue,
+        features = c("percent.mt") , 
+        ncol = 1,
+        col =alpha(DiscretePalette(3, palette = 'parade'), 0.5), 
+        pt.size = 0) +scale_y_log10()+theme_minimal()
+
+
+VlnPlot(tissue,
+        features = c("percent.rbp") , 
+        ncol = 1,
+        col =alpha(DiscretePalette(3, palette = 'parade'), 0.5), 
+        pt.size = 0) +scale_y_log10()+theme_minimal()
+
+```
+
+### "EASY" feature scatter
+
+aka pearson's correlation test
+
+```{r}
+
+
+FeatureScatter(tissue, 
+               feature1 = "nCount_RNA", 
+               feature2 = "percent.mt", 
+               col =alpha(DiscretePalette(3, palette = 'parade'), 0.5), 
+               pt.size = 2) +
+  theme_minimal() # no correlation (very slightly inverse)
+
+
+FeatureScatter(tissue, 
+               feature1 = "nCount_RNA", 
+               feature2 = "percent.rbp", 
+               col =alpha(DiscretePalette(3, palette = 'parade'), 0.5), 
+               pt.size = 2) +
+  theme_minimal() # no correlation
+
+
+FeatureScatter(tissue, 
+               feature1 = "nCount_RNA", 
+               feature2 = "nFeature_RNA",
+               col =alpha(DiscretePalette(3, palette = 'parade'), 0.5), 
+               pt.size = 2) +
+  geom_hline(yintercept = 700)+
+  geom_hline(yintercept = 4000)+ # possible cutoffs
+  theme_minimal() # strong direct correlation
+
+
+```
+
+## 
+
+### In-depth feature scatters
+
+```{r}
+
+# QC metrics
+# just make a tibble of the seurat obj for plotting
+
+qc.metrics <- as_tibble(
+  tissue[[]],
+  rownames="Cell.Barcode" #also known as UMIs (unique molecular identifiers)
+)
+
+head(qc.metrics) # make a lazy df for quality check
+```
+
+```{r}
+
+# counts per feature- vanilla
+
+qc.metrics %>%
+  arrange(percent.mt) %>%
+  ggplot(aes(nCount_RNA,nFeature_RNA,colour=percent.mt)) + 
+  geom_point(size = 1.5) + 
+    scale_color_gradientn(colors=c(alpha("blue",0.1),"#4adede","#edf134", "#f6893e", "#b80f0a")) +
+  ggtitle("Counts per feature") +
+  geom_hline(yintercept = 400)+
+  geom_hline(yintercept = 3500)+
+  #geom_hline(yintercept = 750) +
+  geom_hline(yintercept = 4000, lty = 2)  +  
+  theme_minimal()
+
+```
+
+```{r}
+# counts per feature- log10 scaled
+
+qc.metrics %>%
+  arrange(percent.mt) %>%
+  ggplot(aes(nCount_RNA,nFeature_RNA,colour=percent.mt)) + 
+  geom_point(size = 1.5) + 
+  scale_color_gradientn(colors=c(alpha("blue",0.1),"#4adede","#edf134", "#f6893e", "#b80f0a")) +
+  geom_hline(yintercept = 300, lty = 2)+
+  geom_hline(yintercept = 700, lty = 2)+
+
+   geom_hline(yintercept = 4000, lty = 2)+
+  scale_x_log10() +  scale_y_log10() +
+  ggtitle("Counts per feature- Log10 scaled") +
+  #geom_hline(yintercept = 750) +
+  #geom_hline(yintercept = 2000)  +  
+  theme_minimal()
+
+
+```
+
+high % of mtRNA may point out to broken cells/empty/faulty droplets
+
+low feature counts may indicate qualty problems or specialized cells with restricted expression
+
+## Plotting Complexity
+
+*"Complexity is a unit of measure that points out the richness in expression*\*"
+
+-   richness = amount of genes expressed in amount of cells
+
+#### *C = log10(genes) / log10(counts)*
+
+```{r}
+qc.metrics <- qc.metrics %>%
+  mutate(complexity=log10(nFeature_RNA) / log10(nCount_RNA))  
+
+complexity.lm <- lm(log10(qc.metrics$nFeature_RNA)~log10(qc.metrics$nCount_RNA)) 
+
+summary(complexity.lm)
+
+# this is a model that will be used to compare expected and observed expression complexity -> complexity difference
+```
+
+```{r}
+
+plot(log10(qc.metrics$nFeature_RNA), log10(qc.metrics$nCount_RNA), col = alpha('black', 0.4))
+abline(complexity.lm)
+grid(nx = 10, 
+     ny = 5,
+     lty = 1, 
+     col = alpha("lightgrey", 0.4), 
+     lwd = 1.5)
+```
+
+# Complexity difference
+
+unit of measure that points to the difference between the observed and the expected complexity
+
+-\> lower complexity: less rich expression
+
+-\> higher complexity: al contrario
+
+```{r}
+qc.metrics <- qc.metrics %>%
+  mutate(
+    complexity_diff = log10(nFeature_RNA) - ((log10(qc.metrics$nCount_RNA)*complexity.lm$coefficients[2])+complexity.lm$coefficients[1])
+  )
+
+```
+
+```{r}
+
+qc.metrics %>%
+  ggplot(aes(x=complexity_diff)) +
+  geom_density(fill=alpha("#20d000", 0.6)) + theme_minimal()
+
+# we have a complexity difference almost centered in 0
+# 
+#
+```
+
+```{r}
+
+# max - min complexity difference
+# to scale plots 
+# By calculating the complexity scale, 
+# you gain an understanding of the range 
+# and magnitude of the complexity differences 
+# observed in the dataset
+
+complexity_scale <- min(c(max(qc.metrics$complexity_diff),
+                          0-min(qc.metrics$complexity_diff)))
+
+
+
+qc.metrics %>%
+  mutate(complexity_diff=replace(complexity_diff,complexity_diff< -0.1,-0.1)) %>%
+  ggplot(aes(x=log10(nCount_RNA), 
+             y=log10(nFeature_RNA),
+             colour=complexity_diff)) +
+  geom_point(size=2) +
+  #geom_abline(slope=complexity.lm$coefficients[2], 
+   #           intercept = complexity.lm$coefficients[1]) +
+  geom_hline(yintercept = log10(300))+
+  geom_hline(yintercept = log10(3000))+
+  
+  scale_colour_gradient(low = alpha('darkblue', 0.9),
+                         high = 'green',
+                         #midpoint = 0, 
+                         breaks = waiver(),
+                        n.breaks = 5
+                         ) +
+  theme_minimal()
+```
+
+```{r}
+
+# largest genes summary
+
+largest_gene_list <- qc.metrics %>%
+  group_by(largest_gene) %>%
+  count() %>%
+  arrange(desc(n))
+
+largest_gene_list
+
+```
+
+### QC compared to gene expression
+
+```{r}
+# use it to compare previous plots with genes - mt and rp[ls]
+
+largest_gene_list %>%
+  filter(n>=70) %>% # 10th more expressed is n = 70
+  pull(largest_gene) -> largest_genes_to_plot
+
+qc.metrics %>%
+  filter(largest_gene %in% largest_genes_to_plot) %>%
+  mutate(largest_gene=factor(largest_gene, levels=largest_genes_to_plot)) %>%
+  arrange(largest_gene) %>%
+  ggplot(aes(x=log10(nCount_RNA), y=log10(nFeature_RNA), colour=largest_gene)) +
+  geom_point(size=1.5) +
+  geom_hline(yintercept = log10(350), lty = 2)+
+  geom_hline(yintercept = log10(3000), lty = 2)+
+  scale_colour_manual(values= alpha(DiscretePalette(16), 0.6)) +
+  theme_minimal()+ theme(legend.key.size = unit(1, "line"))+  
+  guides(colour = guide_legend(override.aes = list(size = 5)))+
+    labs(colour = "Top 10 expressed genes")
+```
+
+```{r}
+
+qc.metrics %>%
+  filter(largest_gene %in% largest_genes_to_plot) %>%
+  mutate(largest_gene=factor(largest_gene, levels=largest_genes_to_plot)) %>%
+  arrange(largest_gene) %>%
+  ggplot(aes(x=complexity_diff, y=percent.Largest.Gene, colour=largest_gene)) +
+  geom_point(size = 2.5)+
+  scale_colour_manual(values=alpha(DiscretePalette(16), 0.6))+
+  theme_minimal()+ theme(legend.key.size = unit(1, "line"))+  
+  guides(colour = guide_legend(override.aes = list(size = 5)))+
+    labs(colour = "Top 10 expressed genes")
+
+```
+
+```{r}
+qc.metrics %>%
+  arrange(percent.mt) %>%
+  ggplot(aes(x=complexity_diff, 
+             y=percent.Largest.Gene, 
+             colour=percent.mt)) +
+  geom_point(size = 2.5) +
+  scale_colour_gradient(low=alpha("blue",0.3), high="red2")+ 
+  theme_minimal()+ 
+  theme(legend.key.size = unit(1, "line"))+  
+  guides(colour = guide_legend(override.aes = list(size = 5)))+
+    labs(colour = "% mtRNA")
+
+```
+
+```{r}
+
+qc.metrics %>%
+  arrange(percent.rbp) %>%
+  ggplot(aes(x=complexity_diff, y=percent.Largest.Gene, colour=percent.rbp)) +
+  geom_point(size =1.5) +
+  scale_colour_gradient(low=alpha("blue",0.3), high="red")+ 
+  theme_minimal()+ 
+  theme(legend.key.size = unit(1, "line"))+  
+  guides(colour = guide_legend(override.aes = list(size = 5)))+
+    labs(colour = "% Ribosomal proteins")
+
+
+```
+
+### mtRNA distribution
+
+```{r}
+
+
+qc.metrics %>%
+  ggplot(aes(percent.mt)) + 
+  geom_histogram(binwidth = 1, fill=alpha('darkorange', 0.6), colour="black") +
+  ggtitle("Distribution of % of mtRNA") +
+  geom_vline(xintercept = 10)+ # possible cutoffs
+  geom_vline(xintercept = 5)+
+  theme_minimal()
+
+
+
+```
+
+```{r}
+
+
+qc.metrics %>%
+  ggplot(aes(nFeature_RNA)) + 
+  geom_histogram(binwidth = 1, fill=alpha("#50b9ff", 0.7)) +
+  ggtitle("Distribution of nFeatures") +
+  geom_vline(xintercept = 400, lty = 1) +
+  geom_vline(xintercept = 700, lty = 3) +
+  geom_vline(xintercept = 3000,lty = 2)+
+
+  theme_minimal()
+
+
+```
+
+# FILTERING
+
+*These outlier barcodes can correspond to dying cells, cells whose membranes are broken, or doublets.*
+
+*Barcodes with a low count depth, few detected genes, and a high fraction of mitochondrial counts are indicative of cells whose cytoplasmic mRNA has leaked out through a broken membrane, and thus, only mRNA located in the mitochondria is still conserved .*
+
+*In contrast, cells with unexpectedly high counts and a large number of detected genes may represent doublets. Thus, high‐count depth thresholds are commonly used to filter out potential doublets.*
+
+```{r}
+
+dim_before <- dim(tissue)
+
+tissue <- subset(tissue, 
+                    subset = nFeature_RNA > 400 & # 700 
+                    nFeature_RNA < 3000 & 
+                    percent.mt < 10 & 
+                    percent.Largest.Gene < 10
+                    )
+
+
+tissue
+dim_after <- dim(tissue)
+
+reduction <- dim_before-dim_after
+#reduction
+
+data.frame(before = dim_before[2],
+      after = dim_after[2],
+      reduction = reduction[2])
+
+# raw 7768  cells
+# 5713 after filtering
+# panglaoDB claims 5067
+```
+
+# 
+
+# NORMALIZATION
+
+### LogNorm
+
+"*The default normalization in Seurat is pretty simple - it simply scales the counts by the total counts in each cell, multiplies by 10,000 and then log transforms*"
+
+```{r}
+
+#normalization counts per 10'000
+tissue <- NormalizeData(tissue, 
+                          normalization.method = "LogNormalize", 
+                          scale.factor = 10000
+                          #margin = 2 # menas to normalize per cell
+                                      # instead of gene
+                           )
+```
+
+```{r}
+
+gene.expression <- apply(tissue@assays$RNA@data,1,mean)
+gene.expression <- sort(gene.expression, decreasing = TRUE)
+
+head(gene.expression, n= 25)
+
+```
+
+```{r}
+
+VlnPlot(tissue, features = c("Malat1", "Fth1"), pt.size = 0,col = DiscretePalette(5))
+
+```
+
+```{r}
+
+ggplot(mapping = aes(tissue@assays$RNA@data["Malat1",])) + 
+  geom_histogram(binwidth = 0.05, fill=alpha("darkred", 0.7), colour="black") + 
+  ggtitle("Malat1 expression")+
+  theme_minimal()
+
+
+ggplot(mapping = aes(tissue@assays$RNA@data["Fth1",])) + 
+  geom_histogram(binwidth = 0.05, fill=alpha("darkred", 0.7), colour="black") + 
+  ggtitle("Fth1 expression")+
+  theme_minimal()
+
+```
+
+```{r}
+# this plot tells us the normalization we used
+# leaves a bias at 0
+# it will work anyway
+
+as_tibble(
+  tissue@assays$RNA@data[,1:100]
+) %>%
+  pivot_longer(
+    cols=everything(),
+    names_to="cell",
+    values_to="expression"
+  ) %>%
+  ggplot(aes(x=expression, group=cell)) +
+  geom_density() +
+  coord_cartesian(ylim=c(0,0.6), xlim=c(0,3))+
+  theme_minimal()
+```
+
+```{r}
+# another normalization view plot
+
+
+normalisation.qc <- tibble( pc95 = apply(tissue[["RNA"]]@data,2,quantile,0.95),
+                              measured = apply(tissue[["RNA"]]@data,2,function(x)(100*sum(x!=0))/length(x))
+                            ) 
+
+normalisation.qc %>% 
+  ggplot(aes(x=measured,y=pc95))+
+  geom_point()+
+  ggtitle("Normalisation of data")+
+  theme_minimal()
+```
+
+# CELL CYCLE
+
+```{r}
+# phase assign
+tissue <- CellCycleScoring(tissue, s.features = cc.genes.updated.2019$s.genes, g2m.features = cc.genes.updated.2019$g2m.genes, set.ident = TRUE)
+# converting names to uppercase reduces match-case errors
+
+S_phase <- table(tissue[['Phase']]=='S')
+
+G1_phase <- table(tissue[['Phase']]=='G1')
+
+G2M_phase <- table(tissue[['Phase']]=='G2M')
+
+# report
+data.frame(S = S_phase[2], 
+            G1 = G1_phase[2], 
+            G2 = G2M_phase[2])
+
+# head(tissue[[]])
+
+```
+
+```{r}
+# low effort phase plot
+as_tibble(tissue[[]]) %>%
+  ggplot(aes(Phase)) + 
+  geom_bar(fill = alpha(c("#f88399", "#249225", '#1167b1'), 0.8),
+           colour = 'black') +
+  theme_minimal()
+
+
+# more sophisticate
+as_tibble(tissue[[]]) %>%
+  ggplot(aes(x=S.Score, y=G2M.Score, color=Phase)) + 
+  geom_point() +
+  coord_cartesian(xlim=c(-0.15,0.15), ylim=c(-0.15,0.15))+ 
+  theme_minimal()+ 
+  theme(legend.key.size = unit(1.1, "line"))+  
+  guides(colour = guide_legend(override.aes = list(size = 6)))+
+    labs(colour = "Cell phase")
+
+```
+
+### Variable Features
+
+```{r}
+
+tissue <- FindVariableFeatures(tissue,
+                                 selection.method = "vst", 
+                                 nfeatures=2000) 
+
+top10 <- head(VariableFeatures(tissue), 10)
+
+```
+
+```{r}
+
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(tissue)+theme_minimal()
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE) +theme_minimal()
+plot1 
+plot2
+
+```
+
+# SCALING
+
+*Before putting the data into PCA for dimensionality reduction we will scale the genes so that they have a mean of 0 and a variance of 1. This is claimed to make the analysis less biased by expression level in the PCA.*
+
+```{r}
+
+all.genes <- rownames(tissue)
+
+tissue <- ScaleData(tissue,
+                    #vars.to.regress = c("S.Score", "G2M.Score"),
+                    features = all.genes
+                    )
+
+
+# alternative scaling
+
+# tissue <- SCTransform(tissue, 
+ #                       method = "glmGamPoi",
+  #                      verbose = T )################################
+                                       # according to Seurat guide,
+                                       # - MARCH 2023 update -                                                       # this is the preferred method
+                                       # and does the job of ScaleData,                                              # FindVariableFeature and Normalize
+                                      ################################
+```
+
+```{r}
+
+
+#remove the cell cycle effect
+#tissue <- ScaleData(tissue, vars.to.regress = c("S.Score", "G2M.Score"), features = all.genes)
+
+#remove the bias due to the % of mt RNA
+#tissue <- ScaleData(tissue, vars.to.regress = "percent.mt", features = all.genes)
+
+# these steps look unnecessary for the case
+```
+
+# PCA
+
+```{r}
+
+tissue <- RunPCA(tissue, features = VariableFeatures(object = tissue))
+
+# Examine and visualize PCA results a few different ways
+# print(tissue[["pca"]], dims = 1:5, nfeatures = 5)
+VizDimLoadings(tissue, dims = 1:2, reduction = "pca")
+
+```
+
+```{r}
+
+DimPlot(tissue,
+        reduction = "pca",
+        pt.size = 2,
+        label = F,
+        cols = alpha(c("#14d930",'#1167f1', "#f99599" ), 0.5))+
+  theme_minimal()
+
+```
+
+```{r}
+
+options(ggrepel.max.overlaps = 25)
+
+DimPlot(tissue,
+        reduction="pca", 
+        group.by = "largest_gene", 
+        pt.size = 1.5,
+        label = TRUE, 
+        label.size = 3,
+        repel = T) + 
+  theme_minimal()+ 
+  NoLegend()
+
+```
+
+## Elbow plot
+
+```{r}
+
+ElbowPlot(tissue, ndims=50) + 
+  theme_minimal()
+
+```
+
+```{r}
+# better elbow plot
+
+pct <- tissue[["pca"]]@stdev / sum(tissue[["pca"]]@stdev) * 100
+
+# Calculate cumulative percents for each PC
+cumu <- cumsum(pct)
+
+# Determine which PC exhibits cumulative percent greater than 90% and % variation associated with the PC as less than 5
+co1 <- which(cumu > 90 & pct < 5)[1]
+
+# last point where change of % of variation is more than 0.1%.
+co2 <- sort(which((pct[1:length(pct) - 1] - pct[2:length(pct)]) > 0.1), decreasing = T)[1] + 1
+
+
+# decision -> 15 components
+pcs <- min(co1, co2)
+pcs   
+
+
+# Create a dataframe with values
+plot_df <- data.frame(pct = pct, 
+           cumu = cumu, 
+           rank = 1:length(pct))
+
+
+
+# 15 PCs
+```
+
+```{r}
+# Elbow plot to visualize -> will use firts 15 components
+  ggplot(plot_df, aes(cumu, pct, label = rank, color = rank > pcs)) + 
+  geom_text(size = 5) + 
+  geom_vline(xintercept = 90, color = "grey") + 
+  geom_hline(yintercept = min(pct[pct > 5]), color = "grey") +
+  theme_minimal()
+
+```
+
+```{r}
+
+pc.touse <- (tissue$pca@stdev)^2
+pc.touse <- pc.touse/sum(pc.touse)
+pc.touse <- cumsum(pc.touse)[1:50]
+pc.touse <- min(which(pc.touse>=0.75))
+pc.touse # 12 PCs
+```
+
+### PCA heatmaps
+
+```{r}
+
+DimHeatmap(tissue, dims=1:6, cells=500)
+
+DimHeatmap(tissue, dims=7:12, cells=500)
+
+DimHeatmap(tissue, dims=13:15, cells=500)
+
+```
+
+### tSNE and UMAP for cell phase
+
+```{r}
+#| output: false
+
+
+################# 12 components #################
+
+tissue <- RunTSNE(tissue, dims=1:12)
+tissue <- RunUMAP(tissue, dims = 1:12)
+
+
+```
+
+```{r}
+
+DimPlot(tissue,
+        group.by = 'ident',
+        reduction = "tsne", 
+        pt.size = 1.5, 
+        cols = alpha(c('#1167f1', "#14d930","#f99599" ), 0.4)
+        ) + 
+  theme_minimal()
+
+
+
+#
+
+DimPlot(tissue, 
+        group.by = 'ident',
+        reduction = "umap", 
+        pt.size = 1.2, 
+        cols = alpha(c('#1167f1', "#14d930","#f99599" ), 0.4)
+        ) + 
+  theme_minimal()
+
+```
+
+```{r}
+#| output: false
+
+################ 15 components ######################
+
+tissue <- RunTSNE(tissue, dims=1:15)
+tissue <- RunUMAP(tissue, dims = 1:15)
+
+```
+
+```{r}
+
+DimPlot(tissue,
+        group.by = 'ident',
+        reduction = "tsne", 
+        pt.size = 1.5, 
+        cols = alpha(c('#1167f1', "#14d930","#f99599" ), 0.4)
+        ) + 
+  theme_minimal()
+
+
+
+#
+
+DimPlot(tissue, 
+        group.by = 'ident',
+        reduction = "umap", 
+        pt.size = 1.2, 
+        cols = alpha(c('#1167f1', "#14d930","#f99579" ), 0.4)
+        ) + 
+  theme_minimal()
+```
+
+cells are clearly grouping according to their cycle phase. Needs an investigation wether this is a positive effect or just a bias source
+
+# CLUSTERING
+
+```         
+"CD8A", "GZMK", "CCL5", "S100A4", "ANXA1", "CCR7", "CD3D", "ISG15", "TCL1A", "FCER2", "XCL1", "FCGR3A"
+
+canonical marker genes
+```
+
+## Resolution estimation
+
+```{r}
+
+# resolution extim- 12 cmps
+
+tissue <- RunTSNE(tissue, dims=1:12)
+tissue <- RunUMAP(tissue, dims = 1:12)
+
+tissue <- FindNeighbors(tissue, dims = 1:12) # 18
+
+compare_cluster <- tissue
+resolutions <- c(0.3, 0.5, 0.8, 1)
+compare_cluster <- FindClusters(compare_cluster, resolution = resolutions)
+clustree(compare_cluster, prefix = "RNA_snn_res.")
+
+
+```
+
+```{r}
+
+# resolution extim- 15 cmps
+
+
+tissue <- RunTSNE(tissue, dims=1:15)
+tissue <- RunUMAP(tissue, dims = 1:15)
+tissue <- FindNeighbors(tissue, dims = 1:15) # 18
+
+compare_cluster <- tissue
+resolutions <- c(0.3, 0.5, 0.8, 1)
+compare_cluster <- FindClusters(compare_cluster, resolution = resolutions)
+clustree(compare_cluster, prefix = "RNA_snn_res.")
+```
+
+i'll choose 15 components at .5 resolution to have a n. of clusters equal to PanglaoDB
+
+# -\> 15 components clustering
+
+```{r}
+
+tissue <- RunTSNE(tissue, dims=1:15)
+tissue <- RunUMAP(tissue, dims = 1:15)
+
+
+tissue <- FindNeighbors(tissue, dims = 1:15)
+tissue <-  FindClusters(tissue, resolution = 0.5)
+
+#head(tissue$seurat_clusters, n=5)
+table(Idents(tissue))
+
+DimPlot(tissue,
+        reduction="pca",
+        label = TRUE) +
+  ggtitle("PC1 vs PC2 with Clusters")
+
+
+```
+
+```{r}
+
+# same Dimplots as before but with clusters intead of phase
+# -- need to check for a correlation
+
+DimPlot(tissue,
+        reduction="tsne", 
+        pt.size = 1, 
+        label = TRUE, 
+        label.size = 7)
+
+
+DimPlot(tissue,
+        reduction="umap", 
+        pt.size = 1, 
+        label = TRUE, 
+        label.size = 7)
+
+
+```
+
+### cluster evaluation
+
+```{r}
+
+
+VlnPlot(tissue,features="nCount_RNA", cols = alpha(DiscretePalette(25), 0.6)) + theme_minimal()
+
+VlnPlot(tissue,features="nFeature_RNA",cols = alpha(DiscretePalette(25), 0.6)) + theme_minimal()
+
+VlnPlot(tissue,features="percent.mt",cols = alpha(DiscretePalette(25), 0.6)) + theme_minimal()
+
+VlnPlot(tissue,features="percent.rbp",cols = alpha(DiscretePalette(25), 0.6)) + theme_minimal()
+
+VlnPlot(tissue,features="percent.Largest.Gene",cols = alpha(DiscretePalette(25), 0.6)) + theme_minimal()
+
+
+#VlnPlot(tissue,features="MALAT1",cols = alpha(DiscretePalette(25), 0.6)) + theme_minimal()
+```
+
+```{r}
+# cell phase per cluster
+tissue@meta.data %>%
+  group_by(seurat_clusters,Phase) %>%
+  count() %>%
+  group_by(seurat_clusters) %>%
+  mutate(percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=seurat_clusters,y=percent, fill=Phase)) +
+  geom_col() +
+  ggtitle("Percentage of cell cycle phases per cluster")
+
+# actually o-meh-ogenous
+```
+
+### largest gene for cluster
+
+```{r}
+
+#table
+tissue[[]] %>%
+  group_by(seurat_clusters, largest_gene) %>%
+  count() %>%
+  arrange(desc(n)) %>%
+  group_by(seurat_clusters) %>%
+  slice(1:2) %>%
+  ungroup() %>%
+  arrange(seurat_clusters, desc(n))
+# actually we observe less than top10 geness
+
+largest_gene_list
+
+
+#plot
+tissue@reductions$tsne@cell.embeddings %>%
+  as_tibble() %>%
+  add_column(seurat_clusters=tissue$seurat_clusters, largest_gene=tissue$largest_gene) %>%
+  filter(largest_gene %in% largest_genes_to_plot) %>%
+  ggplot(aes(x=tSNE_1, y=tSNE_2, colour=seurat_clusters)) +
+  geom_point() +
+  facet_wrap(vars(largest_gene))+ theme_minimal()
+
+
+```
+
+## Finding Markers
+
+```{r}
+# markers of cluster 0 expression across all clusters
+markers_c0 <- FindMarkers(tissue, 
+                          ident.1 = 0,
+                          min.pct = 0.25,
+                          logfc.threshold = 0.25,
+                          test.use = 'wilcox')
+
+
+####################### OBSERVATION ############################
+# for cluster 0 none of the genes passed the min.pct = 25 test # 
+################################################################
+
+
+
+VlnPlot(tissue,
+        features=head(rownames(markers_c0)),
+        ncol = 2)
+```
+
+# ALL MARKERS
+
+## MANUAL WAY
+
+This loop just runs the FindMarkers function on all of the clusters
+
+cluster.markers \<- lapply( levels(tissue\[\["seurat_clusters"\]\]\[\[1\]\]), function(x)FindMarkers(tissue,ident.1 = x, #min.pct = 0.25 ) )
+
+## Automated way
+
+```{r}
+
+#| output: false
+
+#Top 5 genes in 1 vs all
+#The one vs. all analysis can be iterated automatically:
+
+tissue.markers <- FindAllMarkers(tissue, 
+                                 only.pos = TRUE, 
+                                 min.pct = 0.25, 
+                                 logfc.threshold = 0.25)
+```
+
+```{r}
+
+(as_tibble(tissue.markers) %>%
+    group_by(cluster) %>%
+    slice_max(n = 3, order_by = avg_log2FC)) 
+# top 3 markers for cluster
+
+
+
+```
+
+### clusters (googling marker genes):
+
+-   0 - NEURONS-glutamatergic
+
+    -   pcp4: neurons
+
+    -   cplx2: neurons
+
+    -   ncdn. neurons
+
+-   1 - ASTROCYTES
+
+    -   slc1a3: astocyte
+
+    -   aldoc: hippocampus and purkinje cells neurons
+
+    -   cldn10: astocyte
+
+        -   catch : apoe, mt1
+
+-   2 ASTROCYTES
+
+    -   gfap: glial cells
+
+    -   slc1a2: astocyte-neuron interaction
+
+    -   aqp4: astocyte
+
+        -   atp1a2 mt1 aldoc
+
+-   3 LIKELY DEVELOPING)\--NEURONS
+
+    -   cck: neurpns
+
+    -   snhg11: cell proliferation promoter and migration in glioma
+
+    -   neurod6: neuronal differentiation
+
+        -   nrgn meg3
+
+-   4 neuron precursor/immature
+
+    -   igfbpl1: hjippocampus formation
+
+    -   sox11
+
+    -   calb2: neurons
+
+        -   tmsb10 tubb2b 2ubb5
+
+-   5 MACROPHAGE- MICROCIGLIA
+
+    -   hexb
+
+    -   ctss: aboundant in immune cells-macrophage and microciglia
+
+    -   c1qa: macrophage and microcuuglia
+
+        -   junb ctsb rps5ì4x
+
+-   6 olygodendrocytes precursor cell
+
+    -   c1ql1: astocyte
+
+    -   pdgfra: macrophage and microciglia and glials
+
+    -   olig1: olygodendrocytes
+
+        -   cspg5 ptprz1 fabp7
+
+-   7 endothelial cells
+
+    -   cldn5 endothelial cells / adypocyte
+
+    -   bsg
+
+    -   ly61c: macrophage
+
+        -   tsc22d1 spock2 crip2
+
+-   8 OLYGODENDROCYTES
+
+    -   plp1 olygodendrocytes adn myelinated axons
+
+    -   cldn11 as above
+
+    -   mbp olygodendr
+
+        -   dynll2
+
+-   9 NEURONS maturi
+
+    -   fxyd7: glial cells/neurons
+
+    -   cnih2
+
+    -   gng3: neurons and synapses
+
+        -   snca cplx2
+
+-   10 neuron-glutamatergic
+
+    -   atp1a1
+
+    -   syt7: astrocytes
+
+    -   adcy7: macrophage and microciglia
+
+        -   catch meg3 olfim rtn1
+
+-   11 neurons
+
+    -   snhg11 cell proliferation promoter and migration in glioma
+
+    -   meg3 developing cells
+
+    -   slc17a7: neurons
+
+-   12 NEURONS- GABAergic neurons
+
+    -   snhg11 cell proliferation promoter and migration in glioma
+
+    -   cnr1: neurons
+
+    -   cit : neurons
+
+        -   meg3, pcsk1n
+
+-   13 ENDOTHELIAL CELLS -spiral ganglion
+
+    -   rgs5 synapse in neurons
+
+    -   higd1b muller glia cells endothelial cells
+
+    -   flt1 endothelial cells
+
+        -   tsc22d1 spock2 atp1a2
+
+-   14 - likely developing oligodendrocytw
+
+    -   hmgb2: rna binding prot
+
+    -   pclaf immune response
+
+    -   cenpf- cell division/centromere protein
+
+        -   tuba1b, hmgn1 tubb5
+
+-   15 endothelial cells
+
+    -   vtn
+
+    -   crip1 plasma proteins
+
+    -   hgdb1b: muller gllia cells, smooth muscle cells
+
+        -   atp1a2 ptn cd63
+
+-   16 NEURONS
+
+    -   ncdn neurons
+
+    -   camk2a excitatory neurons
+
+    -   camk2b neurons- visual perception
+
+        -   mt1 atp1a2 apoe
+
+-   17 macrophage - microglial cells
+
+    -   lyz2 immune syst
+
+    -   pf4 immune syst
+
+    -   apoe cancer related+ astocytes
+
+        -   ctsb, cd63
+
+```{r}
+
+# top n gene per cluster
+# ordered by logfc - not FDR
+
+(as_tibble(tissue.markers) %>%
+    group_by(cluster) %>%
+    slice_max(n = 1, order_by = avg_log2FC)) %>%
+  pull(gene)-> top.tissue.markers
+
+top.tissue.markers <- unique(top.tissue.markers)
+
+top.tissue.markers
+length(top.tissue.markers)
+```
+
+```{r}
+
+FeaturePlot(tissue,features=top.tissue.markers[1:6])
+
+FeaturePlot(tissue,features=top.tissue.markers[7:12])
+
+FeaturePlot(tissue,features=top.tissue.markers[13:17])
+```
+
+```{r}
+
+tissue.markers %>%
+group_by(cluster) %>%
+top_n(n = 10, wt = avg_log2FC) -> top10
+DoHeatmap(tissue, features = top10$gene, size=2) + theme(text = element_text(size = 3))+ NoLegend()
+```
+
+# Automatic Cell Type annotation
+
+## CATCH
+
+```{r}
+
+library(scCATCH) 
+```
+
+```{r}
+CATCHobj <- createscCATCH(data = tissue[['RNA']]@data, # feed count table
+                          cluster = as.character(Idents(tissue)))
+
+CATCHobj <- findmarkergene(CATCHobj, 
+                         species = "Mouse", 
+                         marker = cellmatch, 
+                         tissue = "Brain",
+                         cancer = 'Normal',
+                         use_method = "2", # 1 is a pain, 2 is seurat-like
+                         cell_min_pct = 0.25,
+                         logfc = 0.25,
+                         pvalue = 0.05,
+                         #comp_cluster = 18
+                         )
+
+CATCHobj <- findcelltype(CATCHobj)
+```
+
+```{r}
+
+as_tibble(CATCHobj@markergene) %>%
+  group_by(cluster) %>% 
+  slice_max(n = 3, order_by = logfc) 
+```
+
+```{r}
+
+CATCHobj@celltype
+
+```
+
+Hand-curated clusters -\> from findallmarkers and catch results
+
+try to find specific genes for cell subtypes
+
+```{r}
+
+# neurons
+
+clusterNeurons.markers <- FindMarkers(tissue, ident.1 = c(0,3,4,9,10,11,12,16), min.pct = 0.25, test.use = "wilcox")
+clusterNeurons.markers <- clusterNeurons.markers[order(-clusterNeurons.markers$avg_log2FC), ] 
+head(clusterNeurons.markers, n =10)
+```
+
+```{r}
+
+clusterOligoprec.markers <- FindMarkers(tissue, ident.1 = c(6,14,15), min.pct = 0.25, test.use = "wilcox")
+clusterNeurons.markers <- clusterNeurons.markers[order(-clusterNeurons.markers$avg_log2FC), ] 
+head(clusterNeurons.markers, n = 10)
+```
+
+```{r}
+
+clusterMacrophage.markers <- FindMarkers(tissue, ident.1 = c(5,17), min.pct = 0.25, test.use = "wilcox")
+clusterNeurons.markers <- clusterNeurons.markers[order(-clusterNeurons.markers$avg_log2FC), ] 
+head(clusterNeurons.markers, n = 10)
+```
+
+```{r}
+clusterAstrocytes.markers <- FindMarkers(tissue, ident.1 = c(1,2), min.pct = 0.25, test.use = "wilcox")
+clusterNeurons.markers <- clusterNeurons.markers[order(-clusterNeurons.markers$avg_log2FC), ] 
+head(clusterNeurons.markers, n = 10)
+```
+
+## ScType
+
+```{r}
+
+rm(list = ls())
+#| output: false
+lapply(c("tidyverse" ,
+         "dplyr",
+         "Seurat",
+         "HGNChelper"), 
+       library, character.only = T)
+
+
+```
+
+```{r}
+load('hpc.sparse.RData') # loading the dataset 
+# function to remove the ensemble name 
+
+clean_names <- function(sparsematrix) {
+  lapply(rownames(sparsematrix) %>%    
+           strsplit(rownames(sparsematrix), split = '_E'),
+                        FUN = '[', 1)
+  
+}
+
+rownames(sm) <- clean_names(sm) # %>% toupper() #
+
+
+# actual seurat object for analysis
+tissue <- CreateSeuratObject(counts = sm, 
+                                project = "HPC", 
+                                min.cells = 3,
+                                min.features = 200) # preliminary                                                              # filtering 
+
+# add features to seurat object
+tissue$percent.mt <- PercentageFeatureSet(tissue, pattern = "^mt-")
+tissue$percent.rbp <- PercentageFeatureSet(tissue, pattern ="^Rp[ls]")
+# largest gene (most expressed) per cell 
+tissue.nomalat <- tissue[rownames(tissue) != "Malat1",]
+
+tissue.nomalat$largest_count <- apply(tissue.nomalat@assays$RNA@counts,
+                                      MARGIN =  2, 
+                                      FUN = max)
+tissue.nomalat$largest_index <-  apply( tissue.nomalat@assays$RNA@counts,
+                                        MARGIN = 2,
+                                        FUN = which.max
+                                        ) 
+
+tissue.nomalat$largest_gene <- rownames(tissue.nomalat)[tissue.nomalat$largest_index]
+
+tissue.nomalat$percent.Largest.Gene <- 100*tissue.nomalat$largest_count/tissue.nomalat$nCount_RNA
+
+tissue$largest_gene <- tissue.nomalat$largest_gene
+tissue$percent.Largest.Gene <- tissue.nomalat$percent.Largest.Gene 
+
+dim_before <- dim(tissue)
+
+# subset
+tissue <- subset(tissue, 
+                    subset = nFeature_RNA > 400 & # 700 
+                    nFeature_RNA < 3000 & 
+                    percent.mt < 10 &
+                    percent.Largest.Gene < 10
+                    )
+
+
+tissue
+dim_after <- dim(tissue)
+
+reduction <- dim_before-dim_after
+#reduction
+
+data.frame(before = dim_before[2],
+      after = dim_after[2],
+      reduction = reduction[2])
+
+# raw 7768  cells
+# 5713 after filtering
+# panglaoDB claims 5067
+
+tissue
+```
+
+```{r}
+# data processing till PCA
+tissue <- NormalizeData(tissue, normalization.method = "LogNormalize", scale.factor = 10000)
+
+# cell cycle score
+tissue <- CellCycleScoring(tissue, s.features = cc.genes.updated.2019$s.genes, g2m.features = cc.genes.updated.2019$g2m.genes, set.ident = TRUE)
+# converting names to uppercase reduces match-case errors
+# not so true, then it tries a match based on firt uppercase match
+
+S_phase <- table(tissue[['Phase']]=='S')
+
+G1_phase <- table(tissue[['Phase']]=='G1')
+
+G2M_phase <- table(tissue[['Phase']]=='G2M')
+
+# report
+data.frame(S = S_phase[2], 
+            G1 = G1_phase[2], 
+            G2 = G2M_phase[2])
+
+
+tissue <- FindVariableFeatures(tissue, 
+                               selection.method = "vst", 
+                               nfeatures = 2000)
+tissue <- ScaleData(tissue, features = rownames(tissue))
+tissue <- RunPCA(tissue, features = VariableFeatures(object = tissue))
+
+```
+
+```{r}
+# elbow plots for decision -> 12 or 15 PCs
+# better elbow plot
+
+pct <- tissue[["pca"]]@stdev / sum(tissue[["pca"]]@stdev) * 100
+# Calculate cumulative percents for each PC
+cumu <- cumsum(pct)
+# Determine which PC exhibits cumulative percent greater than 90% and % variation associated with the PC as less than 5
+co1 <- which(cumu > 90 & pct < 5)[1]
+# last point where change of % of variation is more than 0.1%.
+co2 <- sort(which((pct[1:length(pct) - 1] - pct[2:length(pct)]) > 0.1), decreasing = T)[1] + 1
+# decision -> 15 components
+pcs <- min(co1, co2)
+pcs   
+# Create a dataframe with values
+plot_df <- data.frame(pct = pct, 
+           cumu = cumu, 
+           rank = 1:length(pct))
+
+
+library(tidyverse)
+# 15 PCs
+# Elbow plot to visualize -> will use firts 15 components
+  ggplot(plot_df, aes(cumu, pct, label = rank, color = rank > pcs)) + 
+  geom_text(size = 5) + 
+  geom_vline(xintercept = 90, color = "grey") + 
+  geom_hline(yintercept = min(pct[pct > 5]), color = "grey") +
+  theme_minimal()
+
+
+  # alternative formula  
+pc.touse <- (tissue$pca@stdev)^2
+pc.touse <- pc.touse/sum(pc.touse)
+pc.touse <- cumsum(pc.touse)[1:50]
+pc.touse <- min(which(pc.touse>=0.75))
+pc.touse # 12 PCs
+
+```
+
+```{r}
+
+# comparative clustering
+
+tissue.12.5 <- FindNeighbors(tissue, dims = 1:12)
+tissue.12.5 <- FindClusters(tissue.12.5, resolution = 0.5)
+tissue.12.5 <- RunUMAP(tissue.12.5, dims = 1:12)
+
+DimPlot(tissue.12.5,
+        reduction="umap", 
+        pt.size = 1, 
+        label = TRUE, 
+        label.size = 7)
+
+
+```
+
+```{r}
+
+
+tissue.12.8 <- FindNeighbors(tissue, dims = 1:12)
+tissue.12.8 <- FindClusters(tissue.12.8, resolution = 0.8)
+tissue.12.8 <- RunUMAP(tissue.12.8, dims = 1:12)
+
+DimPlot(tissue.12.8,
+        reduction = "umap",
+        pt.size = 1, 
+        label = TRUE, 
+        label.size = 7)
+
+
+```
+
+```{r}
+
+tissue.15.5 <- FindNeighbors(tissue, dims = 1:15)
+tissue.15.5 <- FindClusters(tissue.15.5, resolution = 0.5)
+tissue.15.5 <- RunUMAP(tissue.15.5, dims = 1:15)
+
+DimPlot(tissue.15.5, 
+        reduction = "umap",pt.size = 1, 
+        label = TRUE, 
+        label.size = 7)
+
+```
+
+```{r}
+
+tissue.15.8 <- FindNeighbors(tissue, dims = 1:15)
+tissue.15.8 <- FindClusters(tissue.15.8, resolution = 0.8)
+tissue.15.8 <- RunUMAP(tissue.15.8, dims = 1:15)
+
+
+DimPlot(tissue.15.8, 
+        reduction = "umap",
+        pt.size = 1, 
+        label = TRUE, 
+        label.size = 7)
+
+
+```
+
+## scT Cell Types
+
+```{r}
+
+# load gene set preparation function
+source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/gene_sets_prepare.R")
+# load cell type annotation function
+source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/sctype_score_.R")
+
+# DB file
+db_ = "https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/ScTypeDB_full.xlsx";
+
+tissue_exp= "Brain" 
+# e.g. Immune system,Pancreas,Liver,Eye,Kidney,Brain,Lung,Adrenal,Heart,Intestine,Muscle,Placenta,Spleen,Stomach,Thymus 
+
+# prepare gene sets
+gs_list = gene_sets_prepare(db_, tissue_exp)
+```
+
+### 12 PCs, .5 res
+
+```{r}
+
+# get cell-type by cell matrix
+es.max = sctype_score(scRNAseqData = tissue.12.5[["RNA"]]@scale.data, scaled = TRUE, 
+                      gs = gs_list$gs_positive, gs2 = gs_list$gs_negative) 
+
+tissue.12.5
+
+# NOTE: scRNAseqData parameter should correspond to your input scRNA-seq matrix. 
+# In case Seurat is used, it is either tissue[["RNA"]]@scale.data (default), tissue[["SCT"]]@scale.data, in case sctransform is used for normalization,
+# or tissue[["integrated"]]@scale.data, in case a joint analysis of multiple single-cell datasets is performed.
+
+# merge by cluster
+cL_resutls = do.call("rbind", lapply(unique(tissue.12.5@meta.data$seurat_clusters), function(cl){
+    es.max.cl = sort(rowSums(es.max[ ,rownames(tissue.12.5@meta.data[tissue.12.5@meta.data$seurat_clusters==cl, ])]), decreasing = !0)
+    head(data.frame(cluster = cl, type = names(es.max.cl), scores = es.max.cl, ncells = sum(tissue.12.5@meta.data$seurat_clusters==cl)), 10)
+}))
+sctype_scores = cL_resutls %>% group_by(cluster) %>% top_n(n = 1, wt = scores)  
+
+# set low-confident (low ScType score) clusters to "unknown"
+sctype_scores$type[as.numeric(as.character(sctype_scores$scores)) < sctype_scores$ncells/4] = "Unknown"
+print(sctype_scores[,1:3])
+```
+
+```{r}
+# umap plot
+tissue.12.5@meta.data$customclassif = ""
+for(j in unique(sctype_scores$cluster)){
+  cl_type = sctype_scores[sctype_scores$cluster==j,]; 
+  tissue.12.5@meta.data$customclassif[tissue.12.5@meta.data$seurat_clusters == j] = as.character(cl_type$type[1])
+}
+
+DimPlot(tissue.12.5, reduction = "umap", pt.size = 1.2, label = TRUE, repel = TRUE, group.by = 'customclassif')        
+
+```
+
+### 12 PCs, .8 res
+
+```{r}
+
+# get cell-type by cell matrix
+es.max = sctype_score(scRNAseqData = tissue.12.8[["RNA"]]@scale.data, scaled = TRUE, 
+                      gs = gs_list$gs_positive, gs2 = gs_list$gs_negative) 
+
+tissue.12.8
+
+# merge by cluster
+cL_resutls = do.call("rbind", lapply(unique(tissue.12.8@meta.data$seurat_clusters), function(cl){
+    es.max.cl = sort(rowSums(es.max[ ,rownames(tissue.12.8@meta.data[tissue.12.8@meta.data$seurat_clusters==cl, ])]), decreasing = !0)
+    head(data.frame(cluster = cl, type = names(es.max.cl), scores = es.max.cl, ncells = sum(tissue.12.8@meta.data$seurat_clusters==cl)), 10)
+}))
+sctype_scores = cL_resutls %>% group_by(cluster) %>% top_n(n = 1, wt = scores)  
+
+# set low-confident (low ScType score) clusters to "unknown"
+sctype_scores$type[as.numeric(as.character(sctype_scores$scores)) < sctype_scores$ncells/4] = "Unknown"
+print(sctype_scores[,1:3])
+
+```
+
+```{r}
+# umap plot
+tissue.12.8@meta.data$customclassif = ""
+for(j in unique(sctype_scores$cluster)){
+  cl_type = sctype_scores[sctype_scores$cluster==j,]; 
+  tissue.12.8@meta.data$customclassif[tissue.12.8@meta.data$seurat_clusters == j] = as.character(cl_type$type[1])
+}
+
+DimPlot(tissue.12.8, reduction = "umap", pt.size = 2,label = TRUE, repel = TRUE, group.by = 'customclassif')   
+```
+
+### 15 PCs, .5 res
+
+```{r}
+
+# get cell-type by cell matrix
+es.max = sctype_score(scRNAseqData = tissue.15.5[["RNA"]]@scale.data, scaled = TRUE, 
+                      gs = gs_list$gs_positive, gs2 = gs_list$gs_negative) 
+
+tissue.15.5
+
+# merge by cluster
+cL_resutls = do.call("rbind", lapply(unique(tissue.15.5@meta.data$seurat_clusters), function(cl){
+    es.max.cl = sort(rowSums(es.max[ ,rownames(tissue.15.5@meta.data[tissue.15.5@meta.data$seurat_clusters==cl, ])]), decreasing = !0)
+    head(data.frame(cluster = cl, type = names(es.max.cl), scores = es.max.cl, ncells = sum(tissue.15.5@meta.data$seurat_clusters==cl)), 10)
+}))
+sctype_scores = cL_resutls %>% group_by(cluster) %>% top_n(n = 1, wt = scores)  
+
+# set low-confident (low ScType score) clusters to "unknown"
+sctype_scores$type[as.numeric(as.character(sctype_scores$scores)) < sctype_scores$ncells/4] = "Unknown"
+print(sctype_scores[,1:3])
+
+```
+
+```{r}
+# umap plot
+tissue.15.5@meta.data$customclassif = ""
+for(j in unique(sctype_scores$cluster)){
+  cl_type = sctype_scores[sctype_scores$cluster==j,]; 
+  tissue.15.5@meta.data$customclassif[tissue.15.5@meta.data$seurat_clusters == j] = as.character(cl_type$type[1])
+}
+
+DimPlot(tissue.15.5, reduction = "umap",pt.size = 2, label = TRUE, repel = TRUE, group.by = 'customclassif')   
+```
+
+### 15 PCs, .8 res
+
+```{r}
+
+# get cell-type by cell matrix
+es.max = sctype_score(scRNAseqData = tissue.15.8[["RNA"]]@scale.data, scaled = TRUE, 
+                      gs = gs_list$gs_positive, gs2 = gs_list$gs_negative) 
+
+tissue.15.8
+
+# merge by cluster
+cL_resutls = do.call("rbind", lapply(unique(tissue.15.8@meta.data$seurat_clusters), function(cl){
+    es.max.cl = sort(rowSums(es.max[ ,rownames(tissue.15.8@meta.data[tissue.15.8@meta.data$seurat_clusters==cl, ])]), decreasing = !0)
+    head(data.frame(cluster = cl, type = names(es.max.cl), scores = es.max.cl, ncells = sum(tissue.15.8@meta.data$seurat_clusters==cl)), 10)
+}))
+sctype_scores = cL_resutls %>% group_by(cluster) %>% top_n(n = 1, wt = scores)  
+
+# set low-confident (low ScType score) clusters to "unknown"
+sctype_scores$type[as.numeric(as.character(sctype_scores$scores)) < sctype_scores$ncells/4] = "Unknown"
+print(sctype_scores[,1:3])
+```
+
+```{r}
+# umap plot
+tissue.15.8@meta.data$customclassif = ""
+for(j in unique(sctype_scores$cluster)){
+  cl_type = sctype_scores[sctype_scores$cluster==j,]; 
+  tissue.15.8@meta.data$customclassif[tissue.15.8@meta.data$seurat_clusters == j] = as.character(cl_type$type[1])
+}
+
+table(tissue.15.8@meta.data$customclassif)
+
+DimPlot(tissue.15.8, reduction = "umap", pt.size = 2, label = TRUE, repel = TRUE, group.by = 'customclassif')   
+```
